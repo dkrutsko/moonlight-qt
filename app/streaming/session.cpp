@@ -1740,6 +1740,8 @@ void Session::execInternal()
     // NB: m_InputHandler must be initialize before starting the connection.
     m_InputHandler = new SdlInputHandler(*m_Preferences, m_StreamConfig.width, m_StreamConfig.height);
 
+    m_ShmInput.create(m_StreamConfig.width, m_StreamConfig.height);
+
     AsyncConnectionStartThread asyncConnThread(this);
     if (!m_ThreadedExec) {
         // Kick off the async connection thread while we sit here and pump the event loop
@@ -1985,6 +1987,9 @@ void Session::execInternal()
         // blocks this thread too long for high polling rate mice and high
         // refresh rate displays.
         if (!SDL_PollEvent(&event)) {
+            // Process any pending shared memory input commands
+            m_ShmInput.processInput();
+
 #ifndef STEAM_LINK
             SDL_Delay(1);
 #else

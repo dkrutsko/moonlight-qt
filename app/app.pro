@@ -206,6 +206,7 @@ SOURCES += \
     gui/sdlgamepadkeynavigation.cpp \
     streaming/video/overlaymanager.cpp \
     streaming/video/shmoverlay.cpp \
+    streaming/shminput.cpp \
     backend/systemproperties.cpp \
     wm.cpp
 
@@ -243,6 +244,7 @@ HEADERS += \
     gui/sdlgamepadkeynavigation.h \
     streaming/video/overlaymanager.h \
     streaming/video/shmoverlay.h \
+    streaming/shminput.h \
     backend/systemproperties.h
 
 # Platform-specific renderers and decoders
