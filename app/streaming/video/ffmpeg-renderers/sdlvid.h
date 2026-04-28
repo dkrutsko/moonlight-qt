@@ -2,6 +2,7 @@
 
 #include "renderer.h"
 #include "swframemapper.h"
+#include "streaming/video/shmoverlay.h"
 
 #ifdef HAVE_CUDA
 #include "cuda.h"
@@ -26,6 +27,7 @@ public:
 
 private:
     void renderOverlay(Overlay::OverlayType type);
+    void renderShmOverlay(SDL_Rect* videoRect);
 
     static void ffNoopFree(void *opaque, uint8_t *data);
 
@@ -35,6 +37,11 @@ private:
     int m_ColorSpace;
     SDL_Texture* m_OverlayTextures[Overlay::OverlayMax];
     SDL_Rect m_OverlayRects[Overlay::OverlayMax];
+
+    ShmOverlay m_ShmOverlay;
+    SDL_Texture* m_ShmOverlayTexture;
+    int m_ShmOverlayTextureWidth;
+    int m_ShmOverlayTextureHeight;
 
     // Used for CPU conversion of YUV to RGB if needed
     bool m_NeedsYuvToRgbConversion;

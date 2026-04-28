@@ -17,6 +17,9 @@ SdlRenderer::SdlRenderer()
       m_Renderer(nullptr),
       m_Texture(nullptr),
       m_ColorSpace(-1),
+      m_ShmOverlayTexture(nullptr),
+      m_ShmOverlayTextureWidth(0),
+      m_ShmOverlayTextureHeight(0),
       m_NeedsYuvToRgbConversion(false),
       m_SwsContext(nullptr),
       m_RgbFrame(av_frame_alloc()),
@@ -41,6 +44,10 @@ SdlRenderer::~SdlRenderer()
         if (m_OverlayTextures[i] != nullptr) {
             SDL_DestroyTexture(m_OverlayTextures[i]);
         }
+    }
+
+    if (m_ShmOverlayTexture != nullptr) {
+        SDL_DestroyTexture(m_ShmOverlayTexture);
     }
 
     av_frame_free(&m_RgbFrame);
@@ -254,6 +261,48 @@ void SdlRenderer::renderOverlay(Overlay::OverlayType type)
             SDL_RenderCopy(m_Renderer, m_OverlayTextures[type], nullptr, &m_OverlayRects[type]);
         }
     }
+}
+
+void SdlRenderer::renderShmOverlay(SDL_Rect* videoRect)
+{
+    if (!m_ShmOverlay.update()) {
+        return;
+    }
+
+    const uint8_t* pixels = m_ShmOverlay.getPixels();
+    if (pixels == nullptr) {
+        return;
+    }
+
+    int overlayW = m_ShmOverlay.getWidth();
+    int overlayH = m_ShmOverlay.getHeight();
+
+    // Recreate texture if dimensions changed
+    if (m_ShmOverlayTexture == nullptr ||
+        m_ShmOverlayTextureWidth != overlayW ||
+        m_ShmOverlayTextureHeight != overlayH) {
+        if (m_ShmOverlayTexture != nullptr) {
+            SDL_DestroyTexture(m_ShmOverlayTexture);
+        }
+        m_ShmOverlayTexture = SDL_CreateTexture(m_Renderer,
+                                                SDL_PIXELFORMAT_ABGR8888,
+                                                SDL_TEXTUREACCESS_STREAMING,
+                                                overlayW, overlayH);
+        if (m_ShmOverlayTexture == nullptr) {
+            return;
+        }
+        SDL_SetTextureBlendMode(m_ShmOverlayTexture, SDL_BLENDMODE_BLEND);
+        m_ShmOverlayTextureWidth = overlayW;
+        m_ShmOverlayTextureHeight = overlayH;
+    }
+
+    // Upload pixels
+    SDL_UpdateTexture(m_ShmOverlayTexture, nullptr, pixels, overlayW * 4);
+
+    // Draw over the video region
+    SDL_RenderSetViewport(m_Renderer, videoRect);
+    SDL_RenderCopy(m_Renderer, m_ShmOverlayTexture, nullptr, nullptr);
+    SDL_RenderSetViewport(m_Renderer, nullptr);
 }
 
 void SdlRenderer::ffNoopFree(void*, uint8_t*)
@@ -583,7 +632,10 @@ ReadbackRetry:
     // Reset the viewport to the full window for overlay rendering
     SDL_RenderSetViewport(m_Renderer, nullptr);
 
-    // Draw the overlays
+    // Draw the shared memory overlay over the video region
+    renderShmOverlay(&dst);
+
+    // Draw the text overlays
     for (int i = 0; i < Overlay::OverlayMax; i++) {
         renderOverlay((Overlay::OverlayType)i);
     }
