@@ -123,8 +123,6 @@ public:
           m_VideoVertexBuffer(nullptr),
           m_OverlayTextures{},
           m_ShmOverlayTexture(nullptr),
-          m_ShmOverlayTextureWidth(0),
-          m_ShmOverlayTextureHeight(0),
           m_OverlayLock(0),
           m_VideoPipelineState(nullptr),
           m_OverlayPipelineState(nullptr),
@@ -591,19 +589,14 @@ public:
         [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
 
         // Draw shared memory overlay over the video region
-        if (m_ShmOverlay.update()) {
+        if (m_ShmOverlay.hasNewFrame()) {
             const uint8_t* pixels = m_ShmOverlay.getPixels();
             if (pixels != nullptr) {
                 int overlayW = m_ShmOverlay.getWidth();
                 int overlayH = m_ShmOverlay.getHeight();
 
-                // Recreate texture if dimensions changed
-                if (m_ShmOverlayTexture == nullptr ||
-                    m_ShmOverlayTextureWidth != overlayW ||
-                    m_ShmOverlayTextureHeight != overlayH) {
-                    if (m_ShmOverlayTexture != nullptr) {
-                        [m_ShmOverlayTexture release];
-                    }
+                // Create the texture on first use
+                if (m_ShmOverlayTexture == nullptr) {
                     auto texDesc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
                                                                                       width:overlayW
                                                                                      height:overlayH
@@ -612,8 +605,6 @@ public:
                     texDesc.storageMode = MTLStorageModeManaged;
                     texDesc.usage = MTLTextureUsageShaderRead;
                     m_ShmOverlayTexture = [m_MetalLayer.device newTextureWithDescriptor:texDesc];
-                    m_ShmOverlayTextureWidth = overlayW;
-                    m_ShmOverlayTextureHeight = overlayH;
                 }
 
                 // Upload pixel data
@@ -628,6 +619,13 @@ public:
                 [renderEncoder setVertexBuffer:m_VideoVertexBuffer offset:0 atIndex:0];
                 [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
             }
+        }
+        else if (m_ShmOverlayTexture != nullptr) {
+            // No new data, but still render the last frame
+            [renderEncoder setRenderPipelineState:m_OverlayPipelineState];
+            [renderEncoder setFragmentTexture:m_ShmOverlayTexture atIndex:0];
+            [renderEncoder setVertexBuffer:m_VideoVertexBuffer offset:0 atIndex:0];
+            [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }
 
         // Now draw any text overlays that are enabled
@@ -823,6 +821,11 @@ public:
 
         // Create a command queue for submission
         m_CommandQueue = [m_MetalLayer.device newCommandQueue];
+
+        if (!params->testOnly) {
+            m_ShmOverlay.create(params->width, params->height);
+        }
+
         return true;
     }}
 
@@ -972,8 +975,6 @@ private:
     id<MTLTexture> m_OverlayTextures[Overlay::OverlayMax];
     ShmOverlay m_ShmOverlay;
     id<MTLTexture> m_ShmOverlayTexture;
-    int m_ShmOverlayTextureWidth;
-    int m_ShmOverlayTextureHeight;
     SDL_SpinLock m_OverlayLock;
     id<MTLRenderPipelineState> m_VideoPipelineState;
     id<MTLRenderPipelineState> m_OverlayPipelineState;

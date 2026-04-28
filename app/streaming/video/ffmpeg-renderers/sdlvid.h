@@ -40,8 +40,6 @@ private:
 
     ShmOverlay m_ShmOverlay;
     SDL_Texture* m_ShmOverlayTexture;
-    int m_ShmOverlayTextureWidth;
-    int m_ShmOverlayTextureHeight;
 
     // Used for CPU conversion of YUV to RGB if needed
     bool m_NeedsYuvToRgbConversion;

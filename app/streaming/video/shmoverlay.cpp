@@ -9,27 +9,27 @@
 #include <unistd.h>
 #endif
 
+#include <string.h>
+#include <errno.h>
+
 #define SHM_OVERLAY_NAME "/oasis_overlay"
 #define SHM_HEADER_SIZE 24
-#define SHM_RECONNECT_INTERVAL_MS 1000
-#define SHM_STALE_TIMEOUT_MS 2000
 
 ShmOverlay::ShmOverlay()
     : m_MappedData(nullptr),
       m_MappedSize(0),
-      m_Connected(false),
+      m_Created(false),
       m_Width(0),
       m_Height(0),
       m_BufSize(0),
-      m_LastWriteIndex(0),
-      m_StaleStartTicks(0),
-      m_LastReconnectAttempt(0)
+      m_LastWriteIndex(0)
 #ifdef _WIN32
       , m_MapHandle(nullptr)
-#else
-      , m_Fd(-1)
 #endif
 {
+#ifndef _WIN32
+    m_Fd = -1;
+#endif
 }
 
 ShmOverlay::~ShmOverlay()
@@ -44,118 +44,115 @@ uint32_t ShmOverlay::atomicLoad(const void* addr)
     return val;
 }
 
-bool ShmOverlay::tryOpen()
+bool ShmOverlay::create(int width, int height)
 {
+    if (m_Created) {
+        return true;
+    }
+
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+
+    m_Width = width;
+    m_Height = height;
+    m_BufSize = m_Width * m_Height * 4;
+    m_MappedSize = SHM_HEADER_SIZE + 2 * (size_t)m_BufSize;
+
 #ifdef _WIN32
-    m_MapHandle = OpenFileMappingW(FILE_MAP_READ, FALSE, L"oasis_overlay");
+    wchar_t name[] = L"oasis_overlay";
+    m_MapHandle = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr,
+                                     PAGE_READWRITE,
+                                     (DWORD)(m_MappedSize >> 32),
+                                     (DWORD)(m_MappedSize & 0xFFFFFFFF),
+                                     name);
     if (m_MapHandle == nullptr) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "ShmOverlay: CreateFileMappingW failed (%lu)",
+                     GetLastError());
         return false;
     }
 
-    m_MappedData = (uint8_t*)MapViewOfFile(m_MapHandle, FILE_MAP_READ, 0, 0, 0);
+    m_MappedData = (uint8_t*)MapViewOfFile(m_MapHandle, FILE_MAP_ALL_ACCESS, 0, 0, m_MappedSize);
     if (m_MappedData == nullptr) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "ShmOverlay: MapViewOfFile failed (%lu)",
+                     GetLastError());
         CloseHandle(m_MapHandle);
         m_MapHandle = nullptr;
         return false;
     }
-
-    // Query the mapped region size
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(m_MappedData, &mbi, sizeof(mbi)) == 0) {
-        UnmapViewOfFile(m_MappedData);
-        m_MappedData = nullptr;
-        CloseHandle(m_MapHandle);
-        m_MapHandle = nullptr;
-        return false;
-    }
-    m_MappedSize = mbi.RegionSize;
 #else
-    m_Fd = shm_open(SHM_OVERLAY_NAME, O_RDONLY, 0);
+    // Remove any stale segment from a previous run
+    shm_unlink(SHM_OVERLAY_NAME);
+
+    m_Fd = shm_open(SHM_OVERLAY_NAME, O_CREAT | O_RDWR, 0666);
     if (m_Fd < 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "ShmOverlay: shm_open failed (%d)",
+                     errno);
         return false;
     }
 
-    struct stat st;
-    if (fstat(m_Fd, &st) < 0 || st.st_size <= SHM_HEADER_SIZE) {
+    if (ftruncate(m_Fd, m_MappedSize) < 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "ShmOverlay: ftruncate failed (%d)",
+                     errno);
         ::close(m_Fd);
         m_Fd = -1;
+        shm_unlink(SHM_OVERLAY_NAME);
         return false;
     }
 
-    m_MappedSize = st.st_size;
-    m_MappedData = (uint8_t*)mmap(nullptr, m_MappedSize, PROT_READ, MAP_SHARED, m_Fd, 0);
+    m_MappedData = (uint8_t*)mmap(nullptr, m_MappedSize, PROT_READ | PROT_WRITE, MAP_SHARED, m_Fd, 0);
     if (m_MappedData == MAP_FAILED) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "ShmOverlay: mmap failed (%d)",
+                     errno);
         m_MappedData = nullptr;
         ::close(m_Fd);
         m_Fd = -1;
+        shm_unlink(SHM_OVERLAY_NAME);
         return false;
     }
 #endif
 
-    // Read dimensions from header
-    m_Width = (int)*(uint32_t*)(m_MappedData + 4);
-    m_Height = (int)*(uint32_t*)(m_MappedData + 8);
+    // Zero the entire buffer and write the header
+    memset(m_MappedData, 0, m_MappedSize);
+    *(uint32_t*)(m_MappedData + 0) = 0;         // writeIndex
+    *(uint32_t*)(m_MappedData + 4) = m_Width;    // width
+    *(uint32_t*)(m_MappedData + 8) = m_Height;   // height
+    *(int32_t*)(m_MappedData + 12) = 0;          // x
+    *(int32_t*)(m_MappedData + 16) = 0;          // y
+    *(uint32_t*)(m_MappedData + 20) = 0;         // dirty
 
-    if (m_Width <= 0 || m_Height <= 0 || m_Width > 16384 || m_Height > 16384) {
-        close();
-        return false;
-    }
-
-    m_BufSize = m_Width * m_Height * 4;
-
-    // Validate total size
-    size_t expectedSize = SHM_HEADER_SIZE + 2 * (size_t)m_BufSize;
-    if (m_MappedSize < expectedSize) {
-        close();
-        return false;
-    }
-
-    m_Connected = true;
-    m_LastWriteIndex = atomicLoad(m_MappedData);
-    m_StaleStartTicks = 0;
+    m_Created = true;
+    m_LastWriteIndex = 0;
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "ShmOverlay: connected (%dx%d)",
+                "ShmOverlay: created (%dx%d)",
                 m_Width, m_Height);
     return true;
 }
 
-bool ShmOverlay::update()
+bool ShmOverlay::hasNewFrame()
 {
-    if (!m_Connected) {
-        Uint32 now = SDL_GetTicks();
-        if (now - m_LastReconnectAttempt < SHM_RECONNECT_INTERVAL_MS) {
-            return false;
-        }
-        m_LastReconnectAttempt = now;
-        return tryOpen();
+    if (!m_Created) {
+        return false;
     }
 
-    // Check liveness via writeIndex changes
     uint32_t writeIndex = atomicLoad(m_MappedData);
     if (writeIndex != m_LastWriteIndex) {
         m_LastWriteIndex = writeIndex;
-        m_StaleStartTicks = 0;
-    }
-    else {
-        Uint32 now = SDL_GetTicks();
-        if (m_StaleStartTicks == 0) {
-            m_StaleStartTicks = now;
-        }
-        else if (now - m_StaleStartTicks > SHM_STALE_TIMEOUT_MS) {
-            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                        "ShmOverlay: producer stale, disconnecting");
-            close();
-            return false;
-        }
+        return true;
     }
 
-    return true;
+    return false;
 }
 
 const uint8_t* ShmOverlay::getPixels()
 {
-    if (!m_Connected) {
+    if (!m_Created) {
         return nullptr;
     }
 
@@ -173,22 +170,6 @@ int ShmOverlay::getHeight()
     return m_Height;
 }
 
-int ShmOverlay::getX()
-{
-    if (!m_Connected) {
-        return 0;
-    }
-    return (int)*(int32_t*)(m_MappedData + 12);
-}
-
-int ShmOverlay::getY()
-{
-    if (!m_Connected) {
-        return 0;
-    }
-    return (int)*(int32_t*)(m_MappedData + 16);
-}
-
 void ShmOverlay::close()
 {
     if (m_MappedData != nullptr) {
@@ -204,19 +185,19 @@ void ShmOverlay::close()
             ::close(m_Fd);
             m_Fd = -1;
         }
+        shm_unlink(SHM_OVERLAY_NAME);
 #endif
         m_MappedData = nullptr;
     }
 
-    if (m_Connected) {
+    if (m_Created) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "ShmOverlay: disconnected");
+                    "ShmOverlay: destroyed");
     }
 
     m_MappedSize = 0;
-    m_Connected = false;
+    m_Created = false;
     m_Width = 0;
     m_Height = 0;
     m_BufSize = 0;
-    m_StaleStartTicks = 0;
 }

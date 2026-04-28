@@ -18,8 +18,6 @@ SdlRenderer::SdlRenderer()
       m_Texture(nullptr),
       m_ColorSpace(-1),
       m_ShmOverlayTexture(nullptr),
-      m_ShmOverlayTextureWidth(0),
-      m_ShmOverlayTextureHeight(0),
       m_NeedsYuvToRgbConversion(false),
       m_SwsContext(nullptr),
       m_RgbFrame(av_frame_alloc()),
@@ -221,6 +219,10 @@ bool SdlRenderer::initialize(PDECODER_PARAMETERS params)
     SDL_SetHintWithPriority(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0", SDL_HINT_OVERRIDE);
 #endif
 
+    if (!params->testOnly) {
+        m_ShmOverlay.create(params->width, params->height);
+    }
+
     return true;
 }
 
@@ -265,7 +267,13 @@ void SdlRenderer::renderOverlay(Overlay::OverlayType type)
 
 void SdlRenderer::renderShmOverlay(SDL_Rect* videoRect)
 {
-    if (!m_ShmOverlay.update()) {
+    if (!m_ShmOverlay.hasNewFrame()) {
+        // No new data, but still render the existing texture if we have one
+        if (m_ShmOverlayTexture != nullptr) {
+            SDL_RenderSetViewport(m_Renderer, videoRect);
+            SDL_RenderCopy(m_Renderer, m_ShmOverlayTexture, nullptr, nullptr);
+            SDL_RenderSetViewport(m_Renderer, nullptr);
+        }
         return;
     }
 
@@ -277,13 +285,8 @@ void SdlRenderer::renderShmOverlay(SDL_Rect* videoRect)
     int overlayW = m_ShmOverlay.getWidth();
     int overlayH = m_ShmOverlay.getHeight();
 
-    // Recreate texture if dimensions changed
-    if (m_ShmOverlayTexture == nullptr ||
-        m_ShmOverlayTextureWidth != overlayW ||
-        m_ShmOverlayTextureHeight != overlayH) {
-        if (m_ShmOverlayTexture != nullptr) {
-            SDL_DestroyTexture(m_ShmOverlayTexture);
-        }
+    // Create the texture on first use
+    if (m_ShmOverlayTexture == nullptr) {
         m_ShmOverlayTexture = SDL_CreateTexture(m_Renderer,
                                                 SDL_PIXELFORMAT_ABGR8888,
                                                 SDL_TEXTUREACCESS_STREAMING,
@@ -292,14 +295,10 @@ void SdlRenderer::renderShmOverlay(SDL_Rect* videoRect)
             return;
         }
         SDL_SetTextureBlendMode(m_ShmOverlayTexture, SDL_BLENDMODE_BLEND);
-        m_ShmOverlayTextureWidth = overlayW;
-        m_ShmOverlayTextureHeight = overlayH;
     }
 
-    // Upload pixels
+    // Upload pixels and draw over the video region
     SDL_UpdateTexture(m_ShmOverlayTexture, nullptr, pixels, overlayW * 4);
-
-    // Draw over the video region
     SDL_RenderSetViewport(m_Renderer, videoRect);
     SDL_RenderCopy(m_Renderer, m_ShmOverlayTexture, nullptr, nullptr);
     SDL_RenderSetViewport(m_Renderer, nullptr);
