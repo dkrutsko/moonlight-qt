@@ -11,6 +11,7 @@
 #include "audio/renderers/renderer.h"
 #include "video/overlaymanager.h"
 #include "shminput.h"
+#include "shmkeys.h"
 
 class SupportedVideoFormatList : public QList<int>
 {
@@ -279,6 +280,7 @@ private:
 
     Overlay::OverlayManager m_OverlayManager;
     ShmInput m_ShmInput;
+    ShmKeys m_ShmKeys;
 
     static CONNECTION_LISTENER_CALLBACKS k_ConnCallbacks;
     static Session* s_ActiveSession;

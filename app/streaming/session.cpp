@@ -1741,6 +1741,7 @@ void Session::execInternal()
     m_InputHandler = new SdlInputHandler(*m_Preferences, m_StreamConfig.width, m_StreamConfig.height);
 
     m_ShmInput.create(m_StreamConfig.width, m_StreamConfig.height);
+    m_ShmKeys.create();
 
     AsyncConnectionStartThread asyncConnThread(this);
     if (!m_ThreadedExec) {
@@ -1977,19 +1978,21 @@ void Session::execInternal()
         // NB: This behavior was introduced in SDL 2.0.16, but had a few critical
         // issues that could cause indefinite timeouts, delayed joystick detection,
         // and other problems.
-        if (!SDL_WaitEventTimeout(&event, 1000)) {
+        if (!SDL_WaitEventTimeout(&event, 1)) {
+            m_ShmInput.processInput();
+            m_ShmKeys.pollMouseButtons();
             presence.runCallbacks();
             continue;
         }
+        m_ShmInput.processInput();
+        m_ShmKeys.pollMouseButtons();
 #else
+
         // We explicitly use SDL_PollEvent() and SDL_Delay() because
         // SDL_WaitEvent() has an internal SDL_Delay(10) inside which
         // blocks this thread too long for high polling rate mice and high
         // refresh rate displays.
         if (!SDL_PollEvent(&event)) {
-            // Process any pending shared memory input commands
-            m_ShmInput.processInput();
-
 #ifndef STEAM_LINK
             SDL_Delay(1);
 #else
@@ -2051,6 +2054,7 @@ void Session::execInternal()
                     m_AudioMuted = true;
                 }
                 m_InputHandler->notifyFocusLost();
+                m_ShmKeys.clearAll();
                 break;
             case SDL_WINDOWEVENT_FOCUS_GAINED:
                 if (m_Preferences->muteOnFocusLoss) {
@@ -2251,11 +2255,15 @@ void Session::execInternal()
         case SDL_KEYDOWN:
             presence.runCallbacks();
             m_InputHandler->handleKeyEvent(&event.key);
+            m_ShmKeys.setKey((uint8_t)event.key.keysym.scancode,
+                             event.key.state == SDL_PRESSED);
             break;
         case SDL_MOUSEBUTTONDOWN:
         case SDL_MOUSEBUTTONUP:
             presence.runCallbacks();
             m_InputHandler->handleMouseButtonEvent(&event.button);
+            m_ShmKeys.setMouseButton(event.button.button,
+                                     event.button.state == SDL_PRESSED);
             break;
         case SDL_MOUSEMOTION:
             m_InputHandler->handleMouseMotionEvent(&event.motion);

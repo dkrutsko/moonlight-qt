@@ -207,6 +207,7 @@ SOURCES += \
     streaming/video/overlaymanager.cpp \
     streaming/video/shmoverlay.cpp \
     streaming/shminput.cpp \
+    streaming/shmkeys.cpp \
     backend/systemproperties.cpp \
     wm.cpp
 
@@ -245,6 +246,7 @@ HEADERS += \
     streaming/video/overlaymanager.h \
     streaming/video/shmoverlay.h \
     streaming/shminput.h \
+    streaming/shmkeys.h \
     backend/systemproperties.h
 
 # Platform-specific renderers and decoders
