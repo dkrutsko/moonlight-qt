@@ -11,11 +11,12 @@ public:
     // The external overlay producer opens this buffer and writes into it.
     bool create(int width, int height);
 
-    // Returns true if overlay data is available for rendering.
-    bool hasNewFrame();
+    // Acquire the latest frame for reading. Returns the pixel buffer,
+    // or nullptr if no frame is available. Call releaseFrame() when done.
+    const uint8_t* acquireFrame();
 
-    // Get the active RGBA buffer pixels (only valid when hasNewFrame() returns true)
-    const uint8_t* getPixels();
+    // Release the frame acquired by acquireFrame().
+    void releaseFrame();
 
     int getWidth();
     int getHeight();
@@ -24,6 +25,7 @@ public:
 
 private:
     static uint32_t atomicLoad(const void* addr);
+    static void atomicStore(void* addr, uint32_t val);
 
     uint8_t* m_MappedData;
     size_t m_MappedSize;
@@ -33,7 +35,7 @@ private:
     int m_Height;
     int m_BufSize;
 
-    uint32_t m_LastWriteIndex;
+    uint32_t m_AcquiredIndex;
 
 #ifdef _WIN32
     void* m_MapHandle;

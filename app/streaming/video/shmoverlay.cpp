@@ -13,7 +13,15 @@
 #include <errno.h>
 
 #define SHM_OVERLAY_NAME "/oasis_overlay"
-#define SHM_HEADER_SIZE 24
+#define SHM_HEADER_SIZE 32
+#define SHM_NUM_BUFFERS 3
+
+#define SHM_OFFSET_WIDTH    0
+#define SHM_OFFSET_HEIGHT   4
+#define SHM_OFFSET_READY    8
+#define SHM_OFFSET_READING 12
+
+#define SHM_READING_IDLE 0xFF
 
 ShmOverlay::ShmOverlay()
     : m_MappedData(nullptr),
@@ -22,7 +30,7 @@ ShmOverlay::ShmOverlay()
       m_Width(0),
       m_Height(0),
       m_BufSize(0),
-      m_LastWriteIndex(0)
+      m_AcquiredIndex(SHM_READING_IDLE)
 #ifdef _WIN32
       , m_MapHandle(nullptr)
 #endif
@@ -44,6 +52,12 @@ uint32_t ShmOverlay::atomicLoad(const void* addr)
     return val;
 }
 
+void ShmOverlay::atomicStore(void* addr, uint32_t val)
+{
+    SDL_MemoryBarrierRelease();
+    *(volatile uint32_t*)addr = val;
+}
+
 bool ShmOverlay::create(int width, int height)
 {
     if (m_Created) {
@@ -57,7 +71,7 @@ bool ShmOverlay::create(int width, int height)
     m_Width = width;
     m_Height = height;
     m_BufSize = m_Width * m_Height * 4;
-    m_MappedSize = SHM_HEADER_SIZE + 2 * (size_t)m_BufSize;
+    m_MappedSize = SHM_HEADER_SIZE + SHM_NUM_BUFFERS * (size_t)m_BufSize;
 
 #ifdef _WIN32
     wchar_t name[] = L"oasis_overlay";
@@ -119,45 +133,45 @@ bool ShmOverlay::create(int width, int height)
 
     // Zero the entire buffer and write the header
     memset(m_MappedData, 0, m_MappedSize);
-    *(uint32_t*)(m_MappedData + 0) = 0;         // writeIndex
-    *(uint32_t*)(m_MappedData + 4) = m_Width;    // width
-    *(uint32_t*)(m_MappedData + 8) = m_Height;   // height
-    *(int32_t*)(m_MappedData + 12) = 0;          // x
-    *(int32_t*)(m_MappedData + 16) = 0;          // y
-    *(uint32_t*)(m_MappedData + 20) = 0;         // dirty
+    *(uint32_t*)(m_MappedData + SHM_OFFSET_WIDTH) = m_Width;
+    *(uint32_t*)(m_MappedData + SHM_OFFSET_HEIGHT) = m_Height;
+    atomicStore(m_MappedData + SHM_OFFSET_READY, 0);
+    atomicStore(m_MappedData + SHM_OFFSET_READING, SHM_READING_IDLE);
 
     m_Created = true;
-    m_LastWriteIndex = 0;
+    m_AcquiredIndex = SHM_READING_IDLE;
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "ShmOverlay: created (%dx%d)",
+                "ShmOverlay: created (%dx%d, triple-buffered)",
                 m_Width, m_Height);
     return true;
 }
 
-bool ShmOverlay::hasNewFrame()
-{
-    if (!m_Created) {
-        return false;
-    }
-
-    uint32_t writeIndex = atomicLoad(m_MappedData);
-    if (writeIndex != m_LastWriteIndex) {
-        m_LastWriteIndex = writeIndex;
-        return true;
-    }
-
-    return false;
-}
-
-const uint8_t* ShmOverlay::getPixels()
+const uint8_t* ShmOverlay::acquireFrame()
 {
     if (!m_Created) {
         return nullptr;
     }
 
-    uint32_t writeIndex = atomicLoad(m_MappedData);
-    return m_MappedData + SHM_HEADER_SIZE + writeIndex * m_BufSize;
+    uint32_t readyIdx = atomicLoad(m_MappedData + SHM_OFFSET_READY);
+    if (readyIdx >= SHM_NUM_BUFFERS) {
+        return nullptr;
+    }
+
+    m_AcquiredIndex = readyIdx;
+    atomicStore(m_MappedData + SHM_OFFSET_READING, readyIdx);
+
+    return m_MappedData + SHM_HEADER_SIZE + readyIdx * m_BufSize;
+}
+
+void ShmOverlay::releaseFrame()
+{
+    if (!m_Created) {
+        return;
+    }
+
+    m_AcquiredIndex = SHM_READING_IDLE;
+    atomicStore(m_MappedData + SHM_OFFSET_READING, SHM_READING_IDLE);
 }
 
 int ShmOverlay::getWidth()
@@ -173,6 +187,11 @@ int ShmOverlay::getHeight()
 void ShmOverlay::close()
 {
     if (m_MappedData != nullptr) {
+        // Release any held frame before unmapping
+        if (m_AcquiredIndex != SHM_READING_IDLE) {
+            releaseFrame();
+        }
+
 #ifdef _WIN32
         UnmapViewOfFile(m_MappedData);
         if (m_MapHandle != nullptr) {

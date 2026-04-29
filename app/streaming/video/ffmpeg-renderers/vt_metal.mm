@@ -589,8 +589,8 @@ public:
         [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
 
         // Draw shared memory overlay over the video region
-        if (m_ShmOverlay.hasNewFrame()) {
-            const uint8_t* pixels = m_ShmOverlay.getPixels();
+        {
+            const uint8_t* pixels = m_ShmOverlay.acquireFrame();
             if (pixels != nullptr) {
                 int overlayW = m_ShmOverlay.getWidth();
                 int overlayH = m_ShmOverlay.getHeight();
@@ -613,19 +613,16 @@ public:
                                           withBytes:pixels
                                         bytesPerRow:overlayW * 4];
 
-                // Draw fullscreen over the video region using the same vertex buffer as video
+                m_ShmOverlay.releaseFrame();
+            }
+
+            // Always draw the texture if we have one
+            if (m_ShmOverlayTexture != nullptr) {
                 [renderEncoder setRenderPipelineState:m_OverlayPipelineState];
                 [renderEncoder setFragmentTexture:m_ShmOverlayTexture atIndex:0];
                 [renderEncoder setVertexBuffer:m_VideoVertexBuffer offset:0 atIndex:0];
                 [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
             }
-        }
-        else if (m_ShmOverlayTexture != nullptr) {
-            // No new data, but still render the last frame
-            [renderEncoder setRenderPipelineState:m_OverlayPipelineState];
-            [renderEncoder setFragmentTexture:m_ShmOverlayTexture atIndex:0];
-            [renderEncoder setVertexBuffer:m_VideoVertexBuffer offset:0 atIndex:0];
-            [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }
 
         // Now draw any text overlays that are enabled
