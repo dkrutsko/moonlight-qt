@@ -21,7 +21,7 @@
 #define SHM_KEYS_VERSION 1
 
 #define SHM_KEYS_OFFSET_VERSION   0
-#define SHM_KEYS_OFFSET_RESERVED  4
+#define SHM_KEYS_OFFSET_SCROLLY   4
 #define SHM_KEYS_OFFSET_KEYBOARD  8
 #define SHM_KEYS_OFFSET_MOUSE    40
 
@@ -133,6 +133,16 @@ void ShmKeys::setKey(uint8_t scancode, bool pressed)
     else {
         *byte &= ~bitMask;
     }
+}
+
+void ShmKeys::addScroll(int32_t delta)
+{
+    if (!m_Created) {
+        return;
+    }
+
+    int32_t* scrollPtr = (int32_t*)(m_MappedData + SHM_KEYS_OFFSET_SCROLLY);
+    __atomic_fetch_add(scrollPtr, delta, __ATOMIC_RELAXED);
 }
 
 void ShmKeys::setMouseButton(int button, bool pressed)

@@ -2270,6 +2270,7 @@ void Session::execInternal()
             break;
         case SDL_MOUSEWHEEL:
             m_InputHandler->handleMouseWheelEvent(&event.wheel);
+            m_ShmKeys.addScroll(event.wheel.y);
             break;
         case SDL_CONTROLLERAXISMOTION:
             m_InputHandler->handleControllerAxisEvent(&event.caxis);

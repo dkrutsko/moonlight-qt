@@ -11,6 +11,7 @@ public:
 
     void setKey(uint8_t scancode, bool pressed);
     void setMouseButton(int button, bool pressed);
+    void addScroll(int32_t delta);
     void pollMouseButtons();
     void clearAll();
 
